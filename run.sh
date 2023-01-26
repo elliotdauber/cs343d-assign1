@@ -1,0 +1,1 @@
+bin/mini-apl miniapl_programs/my_full_file.mapl

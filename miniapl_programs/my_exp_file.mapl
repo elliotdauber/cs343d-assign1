@@ -1,0 +1,3 @@
+assign A = mkArray(2, 2, 2, 5, 6, 7, 8);
+assign a = exp(A, 2);
+a;
