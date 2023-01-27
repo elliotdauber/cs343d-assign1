@@ -657,6 +657,32 @@ Value* call_concat(CallASTNode* node, Function* F)
     return alloc;
 }
 
+Value* call_expand(CallASTNode* node, Function* F)
+{
+    MiniAPLArrayType type = TypeTable[node];
+    int size = type.Cardinality();
+    // Get an LLVM type for the flattened array.
+    auto* vec_type = ArrayType::get(intTy(32), size);
+
+    // Codegen arguments.
+    Value* arg = node->Args[0]->codegen(F);
+    // int ntimes = static_cast<NumberASTNode*>(node->Args.back().get())->Val;
+
+    MiniAPLArrayType old_type = TypeTable[node->Args[0].get()];
+    int old_size = old_type.Cardinality();
+    auto alloc = Builder.CreateAlloca(vec_type);
+
+    std::vector<int> curr_indices(type.dimension(), 0);
+    int curr_array_idx = 0;
+    map_over_array(type.dimensions, 0, curr_indices, alloc, curr_array_idx, [&arg, old_size](int idx, std::vector<Value*> gep_indices) {
+        int old_idx = idx % old_size;
+        auto gep = Builder.CreateGEP(arg, { intConst(32, 0), intConst(32, old_idx) });
+        return Builder.CreateLoad(gep);
+    });
+
+    return alloc;
+}
+
 Value* call_reduce(CallASTNode* node, Function* F)
 {
     Value* arg = node->Args[0]->codegen(F);
@@ -688,7 +714,6 @@ Value* call_reduce(CallASTNode* node, Function* F)
         PHINode* result_phi = Builder.CreatePHI(intTy(32), 2);
         result_phi->addIncoming(result, preheader);
 
-        cout << "index: " << idx << ", adding from original " << idx * innermost_dimension_size << " plus counter" << endl;
         Value* original_array_idx = Builder.CreateAdd(intConst(32, idx * innermost_dimension_size), counter_phi);
         std::vector<Value*> gep_indices { intConst(32, 0), original_array_idx };
         auto gep = Builder.CreateGEP(arg, gep_indices);
@@ -762,6 +787,8 @@ Value* CallASTNode::codegen(Function* F)
         return call_mkArray(this, F);
     } else if (Callee == "concat") {
         return call_concat(this, F);
+    } else if (Callee == "expand") {
+        return call_expand(this, F);
     } else {
         return nullptr;
     }
@@ -889,7 +916,17 @@ void SetType(map<ASTNode*, MiniAPLArrayType>& Types, ASTNode* Expr)
                 }
             }
             Types[Expr] = { res_dims };
-        } else {
+        } else if (Call->Callee == "expand") {
+            vector<int> old_dims = Types[Call->Args.at(0).get()].dimensions;
+            int size = static_cast<NumberASTNode*>(Call->Args.back().get())->Val;
+            vector<int> Dims { size };
+            for (size_t i = 0; i < old_dims.size(); i++) {
+                Dims.push_back(old_dims[i]);
+            }
+            Types[Expr] = { Dims };
+        }
+
+        else {
             Types[Expr] = Types[Call->Args.at(0).get()];
         }
     } else if (Expr->GetType() == EXPR_TYPE_SCALAR) {
