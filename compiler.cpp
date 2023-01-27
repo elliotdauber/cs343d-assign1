@@ -611,6 +611,52 @@ Value* call_exp(CallASTNode* node, Function* F)
     return alloc;
 }
 
+Value* call_concat(CallASTNode* node, Function* F)
+{
+    MiniAPLArrayType type = TypeTable[node];
+    int size = type.Cardinality();
+    // Get an LLVM type for the flattened array.
+    auto* vec_type = ArrayType::get(intTy(32), size);
+
+    // Codegen arguments.
+    Value* arg0 = node->Args[0]->codegen(F);
+    Value* arg1 = node->Args[1]->codegen(F);
+    int concat_dim = static_cast<NumberASTNode*>(node->Args.back().get())->Val;
+
+    MiniAPLArrayType arg0_type = TypeTable[node->Args[0].get()];
+    int concat_const = 1;
+    for (int i = (int)arg0_type.dimensions.size() - 1; i >= concat_dim; i--) {
+        concat_const *= arg0_type.dimensions[i];
+    }
+
+    auto alloc = Builder.CreateAlloca(vec_type);
+
+    std::vector<int> curr_indices(type.dimension(), 0);
+    int curr_array_idx = 0;
+    map_over_array(type.dimensions, 0, curr_indices, alloc, curr_array_idx, [&arg0, &arg1, concat_const](int idx, std::vector<Value*> gep_indices) {
+        int div = idx / concat_const;
+        int mod = div % concat_const;
+        Value* result;
+        if (mod == 0) {
+            int a_idx = div + (idx % concat_const);
+            auto gep0 = Builder.CreateGEP(arg0, { intConst(32, 0), intConst(32, a_idx) });
+            result = Builder.CreateLoad(gep0);
+        } else {
+            // int kdx = idx - arg0_size;
+            int kdx = idx - concat_const;
+            int kdiv = kdx / concat_const;
+            int b_idx = kdiv + (kdx % concat_const);
+
+            auto gep1 = Builder.CreateGEP(arg1, { intConst(32, 0), intConst(32, b_idx) });
+            result = Builder.CreateLoad(gep1);
+        }
+
+        return result;
+    });
+
+    return alloc;
+}
+
 Value* call_reduce(CallASTNode* node, Function* F)
 {
     Value* arg = node->Args[0]->codegen(F);
@@ -714,6 +760,8 @@ Value* CallASTNode::codegen(Function* F)
         return call_reduce(this, F);
     } else if (Callee == "mkArray") {
         return call_mkArray(this, F);
+    } else if (Callee == "concat") {
+        return call_concat(this, F);
     } else {
         return nullptr;
     }
@@ -828,6 +876,19 @@ void SetType(map<ASTNode*, MiniAPLArrayType>& Types, ASTNode* Expr)
             Types[Expr].dimensions.pop_back();
         } else if (Call->Callee == "add" || Call->Callee == "sub") {
             Types[Expr] = Types[Call->Args.at(0).get()];
+        } else if (Call->Callee == "concat") {
+            int dimension_to_concat = static_cast<NumberASTNode*>(Call->Args.back().get())->Val;
+            vector<int> a_dims = Types[Call->Args.at(0).get()].dimensions;
+            vector<int> b_dims = Types[Call->Args.at(0).get()].dimensions;
+            vector<int> res_dims;
+            for (size_t i = 0; i < a_dims.size(); i++) {
+                if (i == (size_t)dimension_to_concat) {
+                    res_dims.push_back(a_dims[i] + b_dims[i]);
+                } else {
+                    res_dims.push_back(a_dims[i]);
+                }
+            }
+            Types[Expr] = { res_dims };
         } else {
             Types[Expr] = Types[Call->Args.at(0).get()];
         }

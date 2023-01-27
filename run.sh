@@ -1,1 +1,1 @@
-bin/mini-apl miniapl_programs/my_full_file.mapl
+bin/mini-apl miniapl_programs/concat_2_file.mapl
